@@ -41,13 +41,13 @@ header {
     letter-spacing: 3px;
 }
 
-/* --- Основной макет (2 колонки) --- */
+/* --- Основной макет: ДЛЯ ПК (Two-Column) --- */
 main {
     display: flex;
     flex-grow: 1;
 }
 
-/* --- Левая колонка: КОНТАКТЫ --- */
+/* Левая колонка: КОНТАКТЫ */
 #contacts {
     width: 300px;
     min-height: calc(100vh - 80px); /* Вычитаем высоту хедера */
@@ -255,4 +255,61 @@ textarea {
 
 .send-btn:hover {
     background-color: #a8ffff;
+}
+
+/* --- АДАПТИВНОСТЬ ДЛЯ МОБИЛЬНЫХ (max-width: 768px) --- */
+@media (max-width: 768px) {
+    
+    /* Общий макет */
+    main {
+        flex-direction: column; /* Колонки становятся рядами */
+        padding: 0 10px; /* Добавляем небольшой отступ по бокам */
+    }
+
+    /* Скрываем список контактов */
+    #contacts {
+        width: 100%;
+        min-height: auto;
+        border-right: none;
+        border-bottom: 1px solid #333366;
+        padding-bottom: 50px; 
+    }
+    
+    /* Скрываем ненужные элементы списка контактов на мобильных */
+    .contact-list {
+        display: none; 
+    }
+    
+    /* Сдвигаем статус-бар */
+    .status-bar {
+        position: relative;
+        margin-top: 10px;
+    }
+
+    /* Растягиваем поля SDP на всю ширину */
+    .sdp-fields {
+        flex-direction: column;
+    }
+
+    /* Регулируем размер шрифта и паддинги */
+    header {
+        padding: 10px 0;
+    }
+    
+    .logo {
+        font-size: 2em;
+    }
+    
+    #chat-area {
+        padding: 10px 0;
+    }
+    
+    .action-btn {
+        width: 100%;
+        margin-bottom: 5px;
+    }
+    
+    .sdp-actions {
+        flex-direction: column;
+    }
 }
