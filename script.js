@@ -1,7 +1,7 @@
 // --- Конфигурация WebRTC (Расширенный список STUN-серверов) ---
 const configuration = {
     iceServers: [
-        // Бесплатные STUN-серверы Google (основной)
+        // Основные STUN-серверы Google
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
@@ -26,14 +26,14 @@ const IV_LENGTH = 12;
 // --- Конфигурация Diffie-Hellman Key Exchange ---
 let dhKeyPair; 
 const DH_ALGO = 'ECDH';
-const HASH_ALGO = 'SHA-256';
-
+// Мы используем кривую P-256 в generateDhKeyPair
 // --- DOM-элементы ---
 const $statusText = document.getElementById('conn-state');
 const $chatWindow = document.getElementById('chat-window');
 const $offerSdp = document.getElementById('offer-sdp');
 const $remoteSdp = document.getElementById('remote-sdp');
 const $messageInput = document.getElementById('message-input');
+
 
 // --- Функции для E2EE (Diffie-Hellman) ---
 
@@ -103,6 +103,7 @@ async function encryptMessage(text) {
     combined.set(iv, 0);
     combined.set(new Uint8Array(ciphertext), iv.length);
     
+    // Передаем как Base64 (текст)
     return btoa(String.fromCharCode.apply(null, combined));
 }
 
@@ -136,6 +137,7 @@ async function decryptMessage(base64Text) {
 
 // --- Функции для чата и интерфейса ---
 
+/** Добавляет сообщение в окно чата */
 function appendMessage(text, type) {
     const msgElement = document.createElement('div');
     msgElement.classList.add('message', type);
@@ -144,11 +146,11 @@ function appendMessage(text, type) {
     $chatWindow.scrollTop = $chatWindow.scrollHeight; 
 }
 
+/** Отправляет сообщение через P2P-канал */
 window.sendMessage = async function() {
     const message = $messageInput.value.trim();
     if (message && dataChannel && dataChannel.readyState === 'open') {
         
-        // ШИФРОВАНИЕ
         const encryptedMessage = await encryptMessage(message);
         dataChannel.send(encryptedMessage);
         
@@ -159,10 +161,32 @@ window.sendMessage = async function() {
     }
 }
 
+/** Обновляет статус соединения на экране */
 function updateStatus(text, color = '#66ccff') {
     $statusText.textContent = text;
     $statusText.style.color = color;
 }
+
+/** Копирует сгенерированный SDP/JSON в буфер обмена */
+window.copySdp = function() {
+    $offerSdp.select();
+    $offerSdp.setSelectionRange(0, 99999); 
+    try {
+        navigator.clipboard.writeText($offerSdp.value)
+            .then(() => {
+                updateStatus('JSON скопирован в буфер обмена. Отправьте собеседнику!', '#00ff7f');
+            })
+            .catch(err => {
+                // Fallback для старых/мобильных браузеров
+                document.execCommand('copy');
+                updateStatus('JSON скопирован (через fallback). Отправьте собеседнику!', '#00ff7f');
+            });
+    } catch (err) {
+        // Финальный fallback
+        document.execCommand('copy');
+        updateStatus('JSON скопирован (через fallback). Отправьте собеседнику!', '#00ff7f');
+    }
+};
 
 // --- Функции WebRTC ---
 
@@ -170,9 +194,6 @@ function setupDataChannel(channel) {
     channel.onopen = async () => {
         updateStatus('Соединение P2P установлено! (открыто)', '#00ff7f'); 
         appendMessage('*** Соединение установлено ***', 'system-message');
-        
-        // Ключ E2EE теперь генерируется в processSdp, 
-        // так как он требует обмена ключами DH.
     };
 
     channel.onmessage = async (event) => {
@@ -193,6 +214,7 @@ function initializePeerConnection() {
     peerConnection = new RTCPeerConnection(configuration);
     updateStatus('Инициализировано. Сбор ICE-кандидатов...');
     
+    // Только логирование ICE-кандидатов
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
             console.log("ICE Candidate collected: ", event.candidate);
@@ -270,16 +292,16 @@ window.processSdp = async function() {
             // Если это Offer, мы - Получатель
             updateStatus('Получено Offer. Создаем Answer и общий ключ...');
             
-            // Генерируем свои DH ключи
+            // 1. Генерируем свои DH ключи
             await generateDhKeyPair();
             
-            // Вычисляем общий секретный ключ (E2EE)
+            // 2. Вычисляем общий секретный ключ (E2EE)
             await deriveEncryptionKey(remoteDhKey);
 
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer); 
             
-            // Выводим Answer + НАШ публичный DH ключ
+            // 3. Выводим Answer + НАШ публичный DH ключ
             setTimeout(async () => {
                  const dhPublicKey = await crypto.subtle.exportKey('jwk', dhKeyPair.publicKey);
                  const answerObject = {
@@ -296,8 +318,6 @@ window.processSdp = async function() {
 
             // Вычисляем общий секретный ключ (E2EE)
             await deriveEncryptionKey(remoteDhKey);
-            
-            // Соединение должно установиться в течение нескольких секунд
         }
         
         $remoteSdp.value = ''; // Очищаем поле ввода!
