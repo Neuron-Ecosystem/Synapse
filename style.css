@@ -313,3 +313,43 @@ textarea {
         flex-direction: column;
     }
 }
+
+/* --- НОВЫЕ СТИЛИ ДЛЯ КНОПКИ КОПИРОВАНИЯ --- */
+.sdp-output-container {
+    position: relative;
+    width: 100%;
+}
+
+.copy-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    padding: 5px 10px;
+    font-size: 0.8em;
+    background-color: #66ccff; /* Голубой */
+    color: #1a1a2e;
+    z-index: 10;
+    font-weight: bold;
+    border-radius: 4px;
+}
+
+.copy-btn:hover {
+    background-color: #a8ffff;
+}
+
+/* Сдвиг текста, чтобы не перекрывать кнопку */
+#offer-sdp {
+    padding-right: 150px; 
+}
+
+/* Мобильные адаптации для кнопки копирования */
+@media (max-width: 768px) {
+    .copy-btn {
+        position: static; /* Кнопка становится ниже textarea */
+        width: 100%;
+        margin-top: 5px;
+    }
+    #offer-sdp {
+        padding-right: 10px; /* Убрать сдвиг на мобильных */
+    }
+}
