@@ -33,19 +33,24 @@
 
             <section id="chat-area">
                 <div class="signaling-box">
-                    <h2>SIGNALING DATA EXCHANGE</h2>
-                    <p class="instruction">Обменяйтесь SDP (Offer/Answer) для установки P2P-связи</p>
-                    
-                    <button class="action-btn" onclick="createOffer()">1. Создать Offer</button>
+    <h2>SIGNALING DATA EXCHANGE</h2>
+    <p class="instruction">Обменяйтесь SDP (Offer/Answer) для установки P2P-связи</p>
+    
+    <button class="action-btn" onclick="createOffer()">1. Создать Offer</button>
 
-                    <div class="sdp-fields">
-                        <textarea id="offer-sdp" placeholder="Ваше Offer / Answer SDP..." readonly></textarea>
-                        
-                        <textarea id="remote-sdp" placeholder="Вставьте Offer или Answer сюда..."></textarea>
-                        
-                        <div class="sdp-actions">
-                            <button class="action-btn process" onclick="processSdp()">2. Обработать SDP</button>
-                        </div>
+    <div class="sdp-fields">
+        <div class="sdp-output-container">
+            <textarea id="offer-sdp" placeholder="Ваш Offer / Answer JSON..." readonly></textarea>
+            <button class="action-btn copy-btn" onclick="copySdp()">Скопировать Offer/Answer</button>
+        </div>
+        
+        <textarea id="remote-sdp" placeholder="Вставьте Offer или Answer JSON сюда..."></textarea>
+        
+        <div class="sdp-actions">
+            <button class="action-btn process" onclick="processSdp()">2. Готово (Обработать Offer/Answer)</button>
+        </div>
+    </div>
+</div>
                     </div>
                 </div>
 
