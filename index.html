@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synapse P2P Chat | Neuron Ecosystem</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-container">
+        <header>
+            <h1 class="logo">Synapse</h1>
+            <p class="subtitle">NEURON ECOSYSTEM</p>
+        </header>
+
+        <main>
+            <section id="contacts">
+                <h2>CONTACTS</h2>
+                <div class="contact-list">
+                    <div class="contact active">
+                        <span class="name">Boyilatay</span>
+                        <span class="status-node connected">Connected</span>
+                    </div>
+                    <div class="contact">
+                        <span class="name">Foriding</span>
+                        <span class="status-node connecting">Connecting</span>
+                    </div>
+                    </div>
+                <div id="connection-status" class="status-bar">
+                    Статус: <span id="conn-state">Не подключен</span>
+                </div>
+            </section>
+
+            <section id="chat-area">
+                <div class="signaling-box">
+                    <h2>SIGNALING DATA EXCHANGE</h2>
+                    <p class="instruction">Обменяйтесь SDP (Offer/Answer) для установки P2P-связи</p>
+                    
+                    <button class="action-btn" onclick="createOffer()">1. Создать Offer</button>
+
+                    <div class="sdp-fields">
+                        <textarea id="offer-sdp" placeholder="Ваше Offer / Answer SDP..." readonly></textarea>
+                        
+                        <textarea id="remote-sdp" placeholder="Вставьте Offer или Answer сюда..."></textarea>
+                        
+                        <div class="sdp-actions">
+                            <button class="action-btn process" onclick="processSdp()">2. Обработать SDP</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="chat-window">
+                    <p class="system-message">*** Ожидание P2P-соединения ***</p>
+                </div>
+
+                <div class="message-input-area">
+                    <input type="text" id="message-input" placeholder="Сообщение" onkeydown="if (event.key === 'Enter') sendMessage()">
+                    <button class="send-btn" onclick="sendMessage()">Отправить</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
