@@ -1,12 +1,12 @@
-// --- Конфигурация WebRTC (Расширенный список серверов) ---
+// --- Конфигурация WebRTC (Расширенный список STUN-серверов) ---
 const configuration = {
     iceServers: [
         // Бесплатные STUN-серверы Google (основной)
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        // Дополнительные публичные STUN-серверы для надежности
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
+        // Дополнительные публичные STUN-серверы для надежности
         { urls: 'stun:stun4.l.google.com:19302' },
         { urls: 'stun:stun.nextcloud.com:443' },
         { urls: 'stun:stunserver.org:3478' }
@@ -17,35 +17,79 @@ let peerConnection;
 let dataChannel;
 let isInitiator = false;
 
-// ... (Остальные переменные и функции E2EE остаются прежними) ...
-
+// --- Конфигурация E2EE ---
 let encryptionKey; 
 const ENCRYPTION_ALGO = 'AES-GCM'; 
 const KEY_LENGTH = 256; 
 const IV_LENGTH = 12;
 
+// --- Конфигурация Diffie-Hellman Key Exchange ---
+let dhKeyPair; 
+const DH_ALGO = 'ECDH';
+const HASH_ALGO = 'SHA-256';
+
+// --- DOM-элементы ---
 const $statusText = document.getElementById('conn-state');
 const $chatWindow = document.getElementById('chat-window');
 const $offerSdp = document.getElementById('offer-sdp');
 const $remoteSdp = document.getElementById('remote-sdp');
 const $messageInput = document.getElementById('message-input');
 
-// --- Функции для E2EE (НЕ ИЗМЕНЕНЫ) ---
+// --- Функции для E2EE (Diffie-Hellman) ---
 
-async function deriveEncryptionKey() {
-    encryptionKey = await crypto.subtle.generateKey(
-        { name: ENCRYPTION_ALGO, length: KEY_LENGTH },
-        true, 
-        ['encrypt', 'decrypt']
+/** Шаг 1: Генерирует локальную пару DH-ключей */
+async function generateDhKeyPair() {
+    dhKeyPair = await crypto.subtle.generateKey(
+        {
+            name: DH_ALGO,
+            namedCurve: 'P-256',
+        },
+        true,
+        ['deriveKey']
     );
-    updateStatus('E2EE Активно: Ключ сгенерирован', '#00ff7f');
+    updateStatus('DH-ключи сгенерированы. Готов к обмену.', '#ffcc00');
 }
 
+/** Шаг 2: Создает общий секретный ключ (EncryptionKey) */
+async function deriveEncryptionKey(remotePublicKey) {
+    if (!dhKeyPair) {
+        throw new Error("Local DH key pair not generated.");
+    }
+    
+    // Импорт публичного ключа собеседника
+    const remoteKey = await crypto.subtle.importKey(
+        'jwk',
+        remotePublicKey,
+        { name: DH_ALGO, namedCurve: 'P-256' },
+        false,
+        [] 
+    );
+
+    // Выведение общего секретного ключа (shared secret)
+    const sharedSecret = await crypto.subtle.deriveKey(
+        {
+            name: DH_ALGO,
+            public: remoteKey,
+        },
+        dhKeyPair.privateKey,
+        {
+            name: ENCRYPTION_ALGO,
+            length: KEY_LENGTH,
+        },
+        true,
+        ['encrypt', 'decrypt']
+    );
+    
+    encryptionKey = sharedSecret;
+    updateStatus('E2EE АКТИВНО! Соединение установлено.', '#00ff7f');
+}
+
+/** Шифрование текста сообщения */
 async function encryptMessage(text) {
     if (!encryptionKey) {
         return "[E2EE_ERROR: NO KEY]"; 
     }
-    // ... (тело функции encryptMessage остается прежним) ...
+    
     const encoded = new TextEncoder().encode(text);
     const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH)); 
     
@@ -62,6 +106,7 @@ async function encryptMessage(text) {
     return btoa(String.fromCharCode.apply(null, combined));
 }
 
+/** Дешифрование полученного текста сообщения */
 async function decryptMessage(base64Text) {
     if (!encryptionKey) return base64Text;
     
@@ -88,7 +133,8 @@ async function decryptMessage(base64Text) {
     }
 }
 
-// --- Функции для чата и интерфейса (НЕ ИЗМЕНЕНЫ) ---
+
+// --- Функции для чата и интерфейса ---
 
 function appendMessage(text, type) {
     const msgElement = document.createElement('div');
@@ -101,6 +147,8 @@ function appendMessage(text, type) {
 window.sendMessage = async function() {
     const message = $messageInput.value.trim();
     if (message && dataChannel && dataChannel.readyState === 'open') {
+        
+        // ШИФРОВАНИЕ
         const encryptedMessage = await encryptMessage(message);
         dataChannel.send(encryptedMessage);
         
@@ -116,17 +164,15 @@ function updateStatus(text, color = '#66ccff') {
     $statusText.style.color = color;
 }
 
-// --- Функции WebRTC (ИЗМЕНЕНИЯ) ---
+// --- Функции WebRTC ---
 
 function setupDataChannel(channel) {
     channel.onopen = async () => {
         updateStatus('Соединение P2P установлено! (открыто)', '#00ff7f'); 
         appendMessage('*** Соединение установлено ***', 'system-message');
         
-        // Генерация ключа после установления соединения
-        if (!encryptionKey) {
-            await deriveEncryptionKey();
-        }
+        // Ключ E2EE теперь генерируется в processSdp, 
+        // так как он требует обмена ключами DH.
     };
 
     channel.onmessage = async (event) => {
@@ -147,8 +193,6 @@ function initializePeerConnection() {
     peerConnection = new RTCPeerConnection(configuration);
     updateStatus('Инициализировано. Сбор ICE-кандидатов...');
     
-    // МЫ НЕ ИСПОЛЬЗУЕМ onicecandidate ДЛЯ ВЫВОДА SDP, 
-    // чтобы избежать проблем на мобильных. Просто логируем его.
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
             console.log("ICE Candidate collected: ", event.candidate);
@@ -157,13 +201,11 @@ function initializePeerConnection() {
         }
     };
 
-    // Обработчик получения удаленного канала данных (для Получателя)
     peerConnection.ondatachannel = (event) => {
         dataChannel = event.channel;
         setupDataChannel(dataChannel);
     };
 
-    // Обновление состояния соединения
     peerConnection.oniceconnectionstatechange = async () => {
         updateStatus('Состояние ICE: ' + peerConnection.iceConnectionState);
     };
@@ -171,71 +213,98 @@ function initializePeerConnection() {
 
 // --- Обработчики кнопок ---
 
+/** Создает Offer (Вызывается Пользователем А) */
 window.createOffer = async function() {
     isInitiator = true;
     initializePeerConnection();
+    
+    // 1. Генерируем DH ключи
+    await generateDhKeyPair();
     
     dataChannel = peerConnection.createDataChannel('chat');
     setupDataChannel(dataChannel);
 
     const offer = await peerConnection.createOffer();
-    // setLocalDescription обязательно вызывается ДО того, как Offer будет отправлен!
     await peerConnection.setLocalDescription(offer); 
     
     updateStatus('Создание Offer...');
 
-    // ИСПРАВЛЕНИЕ: Ждем 1.5 сек для сбора ICE-кандидатов, затем выводим SDP
-    setTimeout(() => {
+    // Таймаут для сбора кандидатов и вывода SDP + DH Public Key
+    setTimeout(async () => {
         if (peerConnection.localDescription) {
-             const sdp = JSON.stringify(peerConnection.localDescription);
-             $offerSdp.value = sdp;
-             updateStatus('Offer готов. Скопируйте.');
+             const dhPublicKey = await crypto.subtle.exportKey('jwk', dhKeyPair.publicKey);
+             
+             const transferObject = {
+                 sdp: peerConnection.localDescription,
+                 dhKey: dhPublicKey,
+             };
+
+             $offerSdp.value = JSON.stringify(transferObject, null, 2); 
+             updateStatus('Offer + DH Key готов. Скопируйте.');
         } else {
              updateStatus('Ошибка: Не удалось создать Offer. Повторите попытку.', 'red');
         }
     }, 1500); 
 }
 
+/** Обрабатывает Offer или Answer (Вызывается Пользователем А и Б) */
 window.processSdp = async function() {
     const sdpValue = $remoteSdp.value.trim();
     if (!sdpValue) {
-        alert('Пожалуйста, вставьте SDP (Offer или Answer) в поле.');
+        alert('Пожалуйста, вставьте Offer/Answer JSON.');
         return;
     }
     
     try {
-        const remoteDescription = JSON.parse(sdpValue);
+        const transferObject = JSON.parse(sdpValue);
+        const remoteDescription = transferObject.sdp;
+        const remoteDhKey = transferObject.dhKey;
         
         if (!peerConnection) {
             initializePeerConnection();
         }
-
-        // Установка удаленного описания
+        
         await peerConnection.setRemoteDescription(remoteDescription);
 
         if (remoteDescription.type === 'offer') {
-            // Если это Offer, мы - Получатель и должны создать Answer
-            updateStatus('Получено Offer. Создаем Answer...');
+            // Если это Offer, мы - Получатель
+            updateStatus('Получено Offer. Создаем Answer и общий ключ...');
             
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer); // setLocalDescription для Answer
+            // Генерируем свои DH ключи
+            await generateDhKeyPair();
+            
+            // Вычисляем общий секретный ключ (E2EE)
+            await deriveEncryptionKey(remoteDhKey);
 
-            // ИСПРАВЛЕНИЕ: Ждем 1.5 сек, затем выводим Answer
-            setTimeout(() => {
-                 const sdp = JSON.stringify(peerConnection.localDescription);
-                 $offerSdp.value = sdp;
-                 updateStatus('Answer готов. Скопируйте и отправьте.');
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer); 
+            
+            // Выводим Answer + НАШ публичный DH ключ
+            setTimeout(async () => {
+                 const dhPublicKey = await crypto.subtle.exportKey('jwk', dhKeyPair.publicKey);
+                 const answerObject = {
+                     sdp: peerConnection.localDescription,
+                     dhKey: dhPublicKey,
+                 };
+                 $offerSdp.value = JSON.stringify(answerObject, null, 2);
+                 updateStatus('Answer + DH Key готов. Скопируйте и отправьте.');
             }, 1500);
             
         } else if (remoteDescription.type === 'answer') {
+            // Если это Answer, мы - Инициатор
             updateStatus('Получено Answer. Установка соединения...');
+
+            // Вычисляем общий секретный ключ (E2EE)
+            await deriveEncryptionKey(remoteDhKey);
+            
+            // Соединение должно установиться в течение нескольких секунд
         }
         
-        $remoteSdp.value = ''; 
+        $remoteSdp.value = ''; // Очищаем поле ввода!
         $offerSdp.select(); 
         
     } catch (e) {
-        alert('Ошибка при обработке SDP. Проверьте JSON. Ошибка: ' + e.message);
-        console.error('Ошибка SDP:', e);
+        alert('Ошибка при обработке JSON/ключей. Убедитесь, что скопирован полный JSON-объект. Ошибка: ' + e.message);
+        console.error('Ошибка SDP/DH:', e);
     }
 }
