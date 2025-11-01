@@ -1,9 +1,15 @@
-// --- Конфигурация WebRTC ---
-// Используем публичные STUN-серверы для обнаружения IP-адресов
+// --- Конфигурация WebRTC (Расширенный список серверов) ---
 const configuration = {
     iceServers: [
+        // Бесплатные STUN-серверы Google (основной)
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        // Дополнительные публичные STUN-серверы для надежности
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.nextcloud.com:443' },
+        { urls: 'stun:stunserver.org:3478' }
     ]
 };
 
@@ -11,39 +17,35 @@ let peerConnection;
 let dataChannel;
 let isInitiator = false;
 
-// --- Конфигурация E2EE ---
+// ... (Остальные переменные и функции E2EE остаются прежними) ...
+
 let encryptionKey; 
 const ENCRYPTION_ALGO = 'AES-GCM'; 
 const KEY_LENGTH = 256; 
-const IV_LENGTH = 12; // Вектор инициализации (Initialization Vector)
+const IV_LENGTH = 12;
 
-// --- DOM-элементы ---
 const $statusText = document.getElementById('conn-state');
 const $chatWindow = document.getElementById('chat-window');
 const $offerSdp = document.getElementById('offer-sdp');
 const $remoteSdp = document.getElementById('remote-sdp');
 const $messageInput = document.getElementById('message-input');
 
-// --- Функции для E2EE ---
+// --- Функции для E2EE (НЕ ИЗМЕНЕНЫ) ---
 
-/** Генерация ключа шифрования (простой вариант для демо) */
 async function deriveEncryptionKey() {
     encryptionKey = await crypto.subtle.generateKey(
         { name: ENCRYPTION_ALGO, length: KEY_LENGTH },
-        true, // key exportable
+        true, 
         ['encrypt', 'decrypt']
     );
-    
     updateStatus('E2EE Активно: Ключ сгенерирован', '#00ff7f');
 }
 
-/** Шифрование текста сообщения */
 async function encryptMessage(text) {
     if (!encryptionKey) {
-        // Если ключа нет, отправляем предупреждение вместо текста
         return "[E2EE_ERROR: NO KEY]"; 
     }
-    
+    // ... (тело функции encryptMessage остается прежним) ...
     const encoded = new TextEncoder().encode(text);
     const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH)); 
     
@@ -53,21 +55,21 @@ async function encryptMessage(text) {
         encoded
     );
     
-    // Объединяем IV и зашифрованный текст
     const combined = new Uint8Array(iv.length + ciphertext.byteLength);
     combined.set(iv, 0);
     combined.set(new Uint8Array(ciphertext), iv.length);
     
-    // Передаем зашифрованные данные как Base64 (текст)
     return btoa(String.fromCharCode.apply(null, combined));
 }
 
-/** Дешифрование полученного текста сообщения */
 async function decryptMessage(base64Text) {
     if (!encryptionKey) return base64Text;
     
     try {
-        // Преобразование Base64 обратно в ArrayBuffer
+        if (base64Text.includes("[E2EE_ERROR: NO KEY]")) {
+            throw new Error("Сообщение было отправлено без активного E2EE ключа.");
+        }
+        
         const combinedBuffer = new Uint8Array(atob(base64Text).split('').map(char => char.charCodeAt(0)));
         
         const iv = combinedBuffer.slice(0, IV_LENGTH);
@@ -82,14 +84,12 @@ async function decryptMessage(base64Text) {
         return new TextDecoder().decode(plaintext);
     } catch (e) {
         console.error("Ошибка дешифрования:", e);
-        return "[СООБЩЕНИЕ НЕ МОЖЕТ БЫТЬ ДЕШИФРОВАНО]";
+        return `[СООБЩЕНИЕ НЕ МОЖЕТ БЫТЬ ДЕШИФРОВАНО: ${e.message}]`;
     }
 }
 
+// --- Функции для чата и интерфейса (НЕ ИЗМЕНЕНЫ) ---
 
-// --- Функции для чата и интерфейса ---
-
-/** Добавляет сообщение в окно чата */
 function appendMessage(text, type) {
     const msgElement = document.createElement('div');
     msgElement.classList.add('message', type);
@@ -98,12 +98,9 @@ function appendMessage(text, type) {
     $chatWindow.scrollTop = $chatWindow.scrollHeight; 
 }
 
-/** Отправляет сообщение через P2P-канал */
 window.sendMessage = async function() {
     const message = $messageInput.value.trim();
     if (message && dataChannel && dataChannel.readyState === 'open') {
-        
-        // ШИФРОВАНИЕ исходящего сообщения
         const encryptedMessage = await encryptMessage(message);
         dataChannel.send(encryptedMessage);
         
@@ -114,23 +111,25 @@ window.sendMessage = async function() {
     }
 }
 
-/** Обновляет статус соединения на экране */
 function updateStatus(text, color = '#66ccff') {
     $statusText.textContent = text;
     $statusText.style.color = color;
 }
 
-// --- Функции WebRTC ---
+// --- Функции WebRTC (ИЗМЕНЕНИЯ) ---
 
-/** Устанавливает обработчики для канала данных */
 function setupDataChannel(channel) {
-    channel.onopen = () => {
+    channel.onopen = async () => {
         updateStatus('Соединение P2P установлено! (открыто)', '#00ff7f'); 
         appendMessage('*** Соединение установлено ***', 'system-message');
+        
+        // Генерация ключа после установления соединения
+        if (!encryptionKey) {
+            await deriveEncryptionKey();
+        }
     };
 
     channel.onmessage = async (event) => {
-        // ДЕШИФРОВАНИЕ входящего сообщения
         const decryptedMessage = await decryptMessage(event.data);
         appendMessage(decryptedMessage, 'remote');
     };
@@ -148,13 +147,13 @@ function initializePeerConnection() {
     peerConnection = new RTCPeerConnection(configuration);
     updateStatus('Инициализировано. Сбор ICE-кандидатов...');
     
-    // Сбор ICE-кандидатов
+    // МЫ НЕ ИСПОЛЬЗУЕМ onicecandidate ДЛЯ ВЫВОДА SDP, 
+    // чтобы избежать проблем на мобильных. Просто логируем его.
     peerConnection.onicecandidate = (event) => {
-        if (!event.candidate) {
-            // Сбор завершен. Выводим Offer/Answer.
-            const sdp = JSON.stringify(peerConnection.localDescription);
-            $offerSdp.value = sdp;
-            updateStatus(isInitiator ? 'Offer готов. Скопируйте.' : 'Answer готов. Скопируйте.');
+        if (event.candidate) {
+            console.log("ICE Candidate collected: ", event.candidate);
+        } else {
+            console.log("ICE Candidate collection finished.");
         }
     };
 
@@ -166,21 +165,12 @@ function initializePeerConnection() {
 
     // Обновление состояния соединения
     peerConnection.oniceconnectionstatechange = async () => {
-        if (peerConnection.iceConnectionState === 'connected') {
-            updateStatus('Соединение установлено!');
-            // Генерация ключа после установления соединения
-            if (!encryptionKey) {
-                await deriveEncryptionKey();
-            }
-        } else {
-             updateStatus('Состояние ICE: ' + peerConnection.iceConnectionState);
-        }
+        updateStatus('Состояние ICE: ' + peerConnection.iceConnectionState);
     };
 }
 
 // --- Обработчики кнопок ---
 
-/** Создает Offer (Вызывается Пользователем А) */
 window.createOffer = async function() {
     isInitiator = true;
     initializePeerConnection();
@@ -189,12 +179,23 @@ window.createOffer = async function() {
     setupDataChannel(dataChannel);
 
     const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
+    // setLocalDescription обязательно вызывается ДО того, как Offer будет отправлен!
+    await peerConnection.setLocalDescription(offer); 
     
     updateStatus('Создание Offer...');
+
+    // ИСПРАВЛЕНИЕ: Ждем 1.5 сек для сбора ICE-кандидатов, затем выводим SDP
+    setTimeout(() => {
+        if (peerConnection.localDescription) {
+             const sdp = JSON.stringify(peerConnection.localDescription);
+             $offerSdp.value = sdp;
+             updateStatus('Offer готов. Скопируйте.');
+        } else {
+             updateStatus('Ошибка: Не удалось создать Offer. Повторите попытку.', 'red');
+        }
+    }, 1500); 
 }
 
-/** Обрабатывает Offer или Answer (Вызывается Пользователем А и Б) */
 window.processSdp = async function() {
     const sdpValue = $remoteSdp.value.trim();
     if (!sdpValue) {
@@ -209,13 +210,23 @@ window.processSdp = async function() {
             initializePeerConnection();
         }
 
+        // Установка удаленного описания
         await peerConnection.setRemoteDescription(remoteDescription);
 
         if (remoteDescription.type === 'offer') {
             // Если это Offer, мы - Получатель и должны создать Answer
             updateStatus('Получено Offer. Создаем Answer...');
+            
             const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
+            await peerConnection.setLocalDescription(answer); // setLocalDescription для Answer
+
+            // ИСПРАВЛЕНИЕ: Ждем 1.5 сек, затем выводим Answer
+            setTimeout(() => {
+                 const sdp = JSON.stringify(peerConnection.localDescription);
+                 $offerSdp.value = sdp;
+                 updateStatus('Answer готов. Скопируйте и отправьте.');
+            }, 1500);
+            
         } else if (remoteDescription.type === 'answer') {
             updateStatus('Получено Answer. Установка соединения...');
         }
@@ -224,7 +235,7 @@ window.processSdp = async function() {
         $offerSdp.select(); 
         
     } catch (e) {
-        alert('Ошибка при обработке SDP. Проверьте JSON.');
+        alert('Ошибка при обработке SDP. Проверьте JSON. Ошибка: ' + e.message);
         console.error('Ошибка SDP:', e);
     }
 }
