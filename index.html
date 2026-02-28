@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>SYNAPSE // P2P BROWSER TERMINAL</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root { --green: #00ff41; --bg: #050505; --dim: #003b00; }
+        body { background: var(--bg); color: var(--green); font-family: 'Courier New', monospace; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        #log { flex: 1; padding: 20px; overflow-y: auto; white-space: pre-wrap; border-bottom: 1px solid var(--dim); }
+        .controls { padding: 15px; background: #000; display: flex; gap: 10px; border-top: 1px solid var(--dim); }
+        input { background: #000; border: 1px solid var(--dim); color: var(--green); padding: 8px; outline: none; flex: 1; }
+        button { background: var(--dim); color: var(--green); border: 1px solid var(--green); cursor: pointer; padding: 5px 15px; }
+        button:hover { background: var(--green); color: #000; }
+        .system { color: #555; }
+        .secure { color: #fff; text-shadow: 0 0 5px var(--green); }
+    </style>
+</head>
+<body>
+
+<div style="padding: 10px; font-size: 0.8em; border-bottom: 1px solid var(--dim);">
+    SYNAPSE STATUS: <span id="status">INITIALIZING...</span> | 
+    YOUR ID: <span id="my-id" style="color:#fff">---</span>
+</div>
+
+<div id="log"></div>
+
+<div class="controls" id="connect-area">
+    <input type="text" id="peer-id-input" placeholder="Введите ID собеседника...">
+    <button onclick="connectToPeer()">CONNECT</button>
+</div>
+
+<div class="controls" id="chat-area" style="display:none;">
+    <input type="text" id="msg-input" placeholder="Зашифрованное сообщение...">
+    <button onclick="sendEncrypted()">SEND</button>
+</div>
+
+<script>
+/**
+ * SYNAPSE CORE: BROWSER-ONLY VERSION
+ */
+let peer, conn;
+let myKeys, peerPubKey, sessionAES;
+
+const ui = {
+    log: (txt, cls='') => {
+        const d = document.createElement('div');
+        d.className = cls;
+        d.innerText = `[${new Date().toLocaleTimeString()}] ${txt}`;
+        document.getElementById('log').appendChild(d);
+        document.getElementById('log').scrollTop = 99999;
+    },
+    status: (txt) => document.getElementById('status').innerText = txt
+};
+
+// --- CRYPTO ENGINE (Web Crypto API) ---
+async function initCrypto() {
+    ui.log("Генерация RSA-2048 ключей...", "system");
+    myKeys = await crypto.subtle.generateKey(
+        { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+        true, ["encrypt", "decrypt"]
+    );
+}
+
+async function encrypt(text) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = await crypto.subtle.encrypt({name: "AES-GCM", iv}, sessionAES, new TextEncoder().encode(text));
+    return { data: Array.from(new Uint8Array(enc)), iv: Array.from(iv) };
+}
+
+async function decrypt(obj) {
+    const dec = await crypto.subtle.decrypt({name: "AES-GCM", iv: new Uint8Array(obj.iv)}, sessionAES, new Uint8Array(obj.data));
+    return new TextDecoder().decode(dec);
+}
+
+// --- P2P ENGINE (PeerJS) ---
+function initP2P() {
+    peer = new Peer(); // Использует публичный облачный сервер PeerJS для поиска
+
+    peer.on('open', (id) => {
+        document.getElementById('my-id').innerText = id;
+        ui.status("WAITING FOR LINK");
+        ui.log(`Ваш временный ID: ${id}`, "secure");
+    });
+
+    // Обработка входящего подключения
+    peer.on('connection', (c) => {
+        conn = c;
+        setupConnection();
+    });
+}
+
+async function connectToPeer() {
+    const remoteId = document.getElementById('peer-id-input').value;
+    if (!remoteId) return;
+    conn = peer.connect(remoteId);
+    setupConnection();
+}
+
+function setupConnection() {
+    conn.on('open', async () => {
+        ui.status("HANDSHAKE...");
+        ui.log("Соединение установлено. Обмен ключами...");
+        
+        // 1. Отправляем Public RSA Key
+        const pub = await crypto.subtle.exportKey("spki", myKeys.publicKey);
+        conn.send({ type: 'HANDSHAKE_PUB', key: Array.from(new Uint8Array(pub)) });
+    });
+
+    conn.on('data', async (data) => {
+        if (data.type === 'HANDSHAKE_PUB') {
+            peerPubKey = await crypto.subtle.importKey("spki", new Uint8Array(data.key), {name: "RSA-OAEP", hash: "SHA-256"}, true, ["encrypt"]);
+            
+            // Если мы инициатор соединения, создаем AES ключ
+            if (conn.peerReceiver !== peer) { // Простая проверка стороны
+                sessionAES = await crypto.subtle.generateKey({name: "AES-GCM", length: 256}, true, ["encrypt", "decrypt"]);
+                const rawAES = await crypto.subtle.exportKey("raw", sessionAES);
+                const wrapped = await crypto.subtle.encrypt({name: "RSA-OAEP"}, peerPubKey, rawAES);
+                conn.send({ type: 'HANDSHAKE_AES', key: Array.from(new Uint8Array(wrapped)) });
+                finalize();
+            }
+        } 
+        else if (data.type === 'HANDSHAKE_AES') {
+            const unwrapped = await crypto.subtle.decrypt({name: "RSA-OAEP"}, myKeys.privateKey, new Uint8Array(data.key));
+            sessionAES = await crypto.subtle.importKey("raw", unwrapped, "AES-GCM", true, ["encrypt", "decrypt"]);
+            finalize();
+        }
+        else if (data.type === 'CHAT') {
+            const text = await decrypt(data.payload);
+            ui.log(`Peer: ${text}`, "secure");
+        }
+    });
+}
+
+function finalize() {
+    ui.status("SECURE");
+    document.getElementById('connect-area').style.display = 'none';
+    document.getElementById('chat-area').style.display = 'flex';
+    ui.log("E2EE КАНАЛ СОЗДАН. Сообщения шифруются AES-GCM.", "system");
+}
+
+async function sendEncrypted() {
+    const input = document.getElementById('msg-input');
+    if (!input.value) return;
+    const payload = await encrypt(input.value);
+    conn.send({ type: 'CHAT', payload });
+    ui.log(`You: ${input.value}`);
+    input.value = '';
+}
+
+// Запуск
+initCrypto().then(initP2P);
+</script>
+</body>
+</html>
