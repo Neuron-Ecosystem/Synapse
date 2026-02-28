@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>SYNAPSE // P2P BROWSER</title>
+    <title>SYNAPSE // P2P TERMINAL</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050505; --dim: #003b00; }
@@ -11,37 +11,34 @@
         .controls { padding: 15px; background: #000; display: flex; gap: 10px; border-top: 1px solid var(--dim); }
         input { background: #000; border: 1px solid var(--dim); color: var(--green); padding: 10px; outline: none; flex: 1; }
         button { background: var(--dim); color: var(--green); border: 1px solid var(--green); cursor: pointer; padding: 5px 20px; font-weight: bold; }
-        button:disabled { opacity: 0.3; cursor: not-allowed; }
-        button:hover:not(:disabled) { background: var(--green); color: #000; }
+        button:disabled { opacity: 0.3; }
         .system { color: #555; font-size: 0.9em; }
         .secure { color: #fff; text-shadow: 0 0 5px var(--green); }
-        #invite-link { color: #008f11; cursor: pointer; text-decoration: underline; font-size: 0.8em; margin-top: 5px; display: block; }
+        .error { color: #ff0055; }
+        #invite-link { color: var(--green); cursor: pointer; text-decoration: underline; font-size: 0.8em; display: block; margin-top: 5px; opacity: 0.7; }
     </style>
 </head>
 <body>
 
 <div style="padding: 10px; border-bottom: 1px solid var(--dim); background: #000;">
-    <div>STATUS: <span id="status">CRYPTO_INIT...</span></div>
-    <div>YOUR ID: <span id="my-id" style="color:#fff">---</span></div>
+    <div>STATUS: <span id="status">INIT...</span></div>
+    <div>ID: <span id="my-id" style="color:#fff">---</span></div>
     <span id="invite-link"></span>
 </div>
 
 <div id="log"></div>
 
 <div class="controls" id="connect-area">
-    <input type="text" id="peer-id-input" placeholder="Вставьте ID собеседника...">
+    <input type="text" id="peer-id-input" placeholder="ID собеседника...">
     <button id="connect-btn" disabled>CONNECT</button>
 </div>
 
 <div class="controls" id="chat-area" style="display:none;">
-    <input type="text" id="msg-input" placeholder="Введите сообщение...">
+    <input type="text" id="msg-input" placeholder="Зашифрованный пакет...">
     <button id="send-btn">SEND</button>
 </div>
 
 <script>
-/**
- * SYNAPSE // Прямое P2P шифрование в браузере
- */
 let peer, conn, myKeys, sessionAES;
 
 const dom = {
@@ -65,124 +62,124 @@ function writeLog(txt, cls='') {
     dom.log.scrollTop = dom.log.scrollHeight;
 }
 
-// 1. Инициализация шифрования
 async function init() {
-    writeLog("Генерация ключей RSA-2048 (Zero-Knowledge)...", "system");
+    writeLog("Генерация RSA-2048...", "system");
     myKeys = await crypto.subtle.generateKey(
         { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
         true, ["encrypt", "decrypt"]
     );
-    
-    writeLog("Криптография готова. Запуск P2P...", "system");
     setupPeer();
 }
 
-// 2. Настройка P2P (PeerJS)
 function setupPeer() {
-    peer = new Peer();
+    // Добавляем Google STUN серверы для обхода NAT
+    peer = new Peer({
+        config: {
+            'iceServers': [
+                { url: 'stun:stun.l.google.com:19302' },
+                { url: 'stun:stun1.l.google.com:19302' }
+            ]
+        }
+    });
 
     peer.on('open', (id) => {
         dom.myId.innerText = id;
-        dom.status.innerText = "READY / WAITING";
+        dom.status.innerText = "READY";
         dom.connectBtn.disabled = false;
         
-        // Создаем ссылку-приглашение
         const url = `${window.location.origin}${window.location.pathname}?join=${id}`;
         dom.invite.innerText = "Скопировать ссылку-приглашение";
         dom.invite.onclick = () => {
             navigator.clipboard.writeText(url);
-            alert("Ссылка скопирована!");
+            writeLog("Ссылка скопирована в буфер.");
         };
 
-        // Авто-вход, если есть ID в URL
-        const params = new URLSearchParams(window.location.search);
-        const joinId = params.get('join');
+        const joinId = new URLSearchParams(window.location.search).get('join');
         if(joinId) {
             dom.peerInput.value = joinId;
-            writeLog(`Обнаружен ID в URL: ${joinId}. Подключаюсь...`);
-            setTimeout(connectToPeer, 1000); 
+            writeLog(`Авто-подключение к: ${joinId}`);
+            setTimeout(connectToPeer, 1500); 
         }
     });
 
-    peer.on('connection', (c) => {
-        conn = c;
-        handleChat();
+    peer.on('connection', (incoming) => {
+        writeLog("Входящий запрос на соединение...");
+        conn = incoming;
+        bindEvents();
     });
 
-    peer.on('error', (err) => {
-        writeLog(`Ошибка: ${err.type}`, "system");
-        console.error(err);
-    });
+    peer.on('error', (err) => writeLog(`Ошибка PeerJS: ${err.type}`, "error"));
 }
 
-// 3. Подключение к другому участнику
 function connectToPeer() {
     const rId = dom.peerInput.value.trim();
-    if(!rId) return;
-    writeLog(`Попытка связи с ${rId}...`);
-    conn = peer.connect(rId);
-    handleChat();
+    if(!rId || rId === peer.id) return;
+    writeLog(`Создание P2P туннеля к ${rId}...`);
+    conn = peer.connect(rId, { reliable: true });
+    bindEvents();
 }
 
-// 4. Логика обмена ключами (Handshake) и чата
-function handleChat() {
+function bindEvents() {
     conn.on('open', async () => {
-        dom.status.innerText = "HANDSHAKE...";
-        // Отправляем публичный ключ
-        const pubKeyRaw = await crypto.subtle.exportKey("spki", myKeys.publicKey);
-        conn.send({ type: 'PUB', key: Array.from(new Uint8Array(pubKeyRaw)) });
+        writeLog("Туннель открыт. Запуск обмена ключами...");
+        dom.status.innerText = "HANDSHAKE";
+        const pub = await crypto.subtle.exportKey("spki", myKeys.publicKey);
+        conn.send({ type: 'RSA_PUB', key: Array.from(new Uint8Array(pub)) });
     });
 
     conn.on('data', async (data) => {
-        if (data.type === 'PUB') {
+        if (data.type === 'RSA_PUB') {
+            writeLog("Получен публичный ключ собеседника.");
             const peerPub = await crypto.subtle.importKey("spki", new Uint8Array(data.key), {name: "RSA-OAEP", hash: "SHA-256"}, true, ["encrypt"]);
             
-            // Если мы подключились к кому-то, мы генерируем общий ключ сессии AES
+            // Инициатор (тот кто нажал Connect) создает AES ключ
             if (conn.peerReceiver !== peer) {
                 sessionAES = await crypto.subtle.generateKey({name: "AES-GCM", length: 256}, true, ["encrypt", "decrypt"]);
-                const rawAES = await crypto.subtle.exportKey("raw", sessionAES);
-                const encryptedAES = await crypto.subtle.encrypt({name: "RSA-OAEP"}, peerPub, rawAES);
-                conn.send({ type: 'AES', key: Array.from(new Uint8Array(encryptedAES)) });
+                const raw = await crypto.subtle.exportKey("raw", sessionAES);
+                const wrapped = await crypto.subtle.encrypt({name: "RSA-OAEP"}, peerPub, raw);
+                conn.send({ type: 'AES_KEY', key: Array.from(new Uint8Array(wrapped)) });
                 startChat();
             }
         } 
-        else if (data.type === 'AES') {
-            const decryptedRaw = await crypto.subtle.decrypt({name: "RSA-OAEP"}, myKeys.privateKey, new Uint8Array(data.key));
-            sessionAES = await crypto.subtle.importKey("raw", decryptedRaw, "AES-GCM", true, ["encrypt", "decrypt"]);
+        else if (data.type === 'AES_KEY') {
+            writeLog("Получен зашифрованный сессионный ключ.");
+            const unwrapped = await crypto.subtle.decrypt({name: "RSA-OAEP"}, myKeys.privateKey, new Uint8Array(data.key));
+            sessionAES = await crypto.subtle.importKey("raw", unwrapped, "AES-GCM", true, ["encrypt", "decrypt"]);
             startChat();
         }
         else if (data.type === 'MSG') {
             const dec = await crypto.subtle.decrypt({name: "AES-GCM", iv: new Uint8Array(data.iv)}, sessionAES, new Uint8Array(data.data));
-            writeLog(`Peer: ${new TextDecoder().decode(dec)}`, "secure");
+            writeLog(`SENDER: ${new TextDecoder().decode(dec)}`, "secure");
         }
+    });
+
+    conn.on('close', () => {
+        writeLog("Соединение разорвано.", "error");
+        location.reload();
     });
 }
 
 function startChat() {
-    dom.status.innerText = "SECURE (AES-256)";
+    dom.status.innerText = "ENCRYPTED";
     dom.connectArea.style.display = "none";
     dom.chatArea.style.display = "flex";
-    writeLog("Канал зашифрован. Приятного общения.", "system");
+    writeLog("Сквозное шифрование AES-256 активно.", "system");
 }
 
 async function send() {
     const val = dom.msgInput.value;
     if(!val || !sessionAES) return;
-    
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const enc = await crypto.subtle.encrypt({name: "AES-GCM", iv}, sessionAES, new TextEncoder().encode(val));
-    
     conn.send({ type: 'MSG', data: Array.from(new Uint8Array(enc)), iv: Array.from(iv) });
-    writeLog(`You: ${val}`);
+    writeLog(`YOU: ${val}`);
     dom.msgInput.value = "";
 }
 
-// Привязка событий
 dom.connectBtn.onclick = connectToPeer;
 dom.sendBtn.onclick = send;
 dom.msgInput.onkeypress = (e) => { if(e.key === 'Enter') send(); };
 
-// Старт
 init();
 </script>
 </body>
